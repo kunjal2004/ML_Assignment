@@ -212,7 +212,3 @@ st.dataframe(data, width="stretch")
 ## Author
 
 Kunjal Chachra
-
-## Repository
-
-[ML_Assignment on GitHub](https://github.com/kunjal2004/ML_Assignment)
