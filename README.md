@@ -1,9 +1,30 @@
 # Machine Learning Assignment 2
 
 A Streamlit-based machine learning application for evaluating and comparing classification models on a dataset.
+## Problem Statement
 
-## Live Demo
-[Open the Streamlit App](https://mlassignment-fqsw3zzjvkf3t5lqsr2rur.streamlit.app/)
+The objective of this project is to implement and compare five machine learning classification algorithms on the Bank Marketing dataset. The models predict whether a client will subscribe to a term deposit (`yes` or `no`). Their performance is evaluated using Accuracy, AUC, Precision, Recall, F1-score, and Matthews Correlation Coefficient (MCC).
+
+## Dataset Description
+
+- **Dataset:** Bank Marketing
+- **Task:** Binary classification
+- **Target variable:** `deposit`
+- **Target classes:** `yes` and `no`
+- **Test records evaluated:** 2,233
+- **Input features:** 16
+- **Dataset files:** `bank.csv` and `test_data.csv`
+
+The application uses the labelled test dataset to evaluate the saved models. The models are loaded from the `model/` directory and are not retrained during evaluation.
+
+## GitHub Repository
+
+[View the complete source code and model artifacts](https://github.com/kunjal2004/ML_Assignment)
+
+## Live Streamlit Application
+
+[Open the deployed Machine Learning Assignment 2 application](https://mlassignment-fqsw3zzjvkf3t5lqsr2rur.streamlit.app/)
+
 ## Overview
 
 This project provides an interactive interface to:
