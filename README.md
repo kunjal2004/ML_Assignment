@@ -2,6 +2,8 @@
 
 A Streamlit-based machine learning application for evaluating and comparing classification models on a dataset.
 
+## Live Demo
+[Open the Streamlit App](https://mlassignment-fqsw3zzjvkf3t5lqsr2rur.streamlit.app/)
 ## Overview
 
 This project provides an interactive interface to:
