@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import joblib
@@ -9,27 +8,42 @@ import streamlit as st
 
 from sklearn.metrics import (
     accuracy_score,
-    classification_report,
-    confusion_matrix,
-    matthews_corrcoef,
+    roc_auc_score,
     precision_score,
     recall_score,
     f1_score,
-    roc_auc_score,
+    matthews_corrcoef,
+    confusion_matrix,
+    classification_report,
     ConfusionMatrixDisplay,
 )
 
 # ============================================================
-# Bank Marketing | ML Experiment Lab
-# Evaluation-only app: models are loaded, never retrained.
+# Bank Marketing | Classification Evaluation Dashboard
+# Evaluation only: saved models are loaded; no retraining.
 # ============================================================
+
+st.set_page_config(
+    page_title="Bank Marketing | ML Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "model"
-TARGET_COLUMN = "deposit"
 
-LABEL_TO_INT = {"no": 0, "yes": 1}
-CLASS_NAMES = ["No subscription", "Subscribed"]
+TARGET = "deposit"
+
+LABEL_MAP = {
+    "no": 0,
+    "yes": 1,
+}
+
+CLASS_NAMES = [
+    "No subscription",
+    "Subscribed",
+]
 
 MODEL_FILES = {
     "Logistic Regression": "logistic_regression.joblib",
@@ -39,570 +53,1107 @@ MODEL_FILES = {
     "Support Vector Machine": "svm.joblib",
 }
 
-# Configure the Streamlit page before creating UI elements.
-st.set_page_config(
-    page_title="Bank Marketing | ML Experiment Lab",
-    page_icon="📊",
-    layout="wide",
-)
 
 # ============================================================
-# Custom styling
+# CUSTOM CSS
 # ============================================================
 
 st.markdown(
     """
     <style>
-      .block-container {
-        padding-top: 1.8rem;
+
+    .block-container {
+        max-width: 1450px;
+        padding-top: 1.2rem;
         padding-bottom: 2.5rem;
-        max-width: 1280px;
-      }
+    }
 
-      .hero {
-        padding: 1.5rem;
-        border-radius: 16px;
-        background: linear-gradient(120deg, #102a43, #245b75);
-        color: white;
-        margin-bottom: 1.2rem;
-      }
-
-      .hero h1 {
+    .main-title {
         font-size: 2rem;
-        margin: 0 0 .4rem 0;
-        color: white;
-      }
+        font-weight: 750;
+        letter-spacing: -0.035em;
+        color: var(--text-color);
+        margin-bottom: .15rem;
+    }
 
-      .hero p {
-        margin: 0;
-        color: #e6f1f5;
-        font-size: 1rem;
-      }
+    .subtitle {
+        color: #718096;
+        font-size: .98rem;
+        margin-bottom: 1.2rem;
+    }
 
-      div[data-testid="stMetric"] {
-        border: 1px solid #d9e2ec;
-        padding: 12px 14px;
+    .eyebrow {
+        font-size: .72rem;
+        letter-spacing: .12em;
+        font-weight: 700;
+        color: #0f766e;
+        text-transform: uppercase;
+        margin-bottom: .45rem;
+    }
+
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(128,128,128,.20);
         border-radius: 12px;
-        background: #f8fafc;
-      }
+        padding: 12px 14px;
+        background: var(--secondary-background-color);
+    }
+
+    div[data-testid="stMetric"] label {
+        font-size: .8rem;
+    }
+
+    div[data-testid="stTabs"] button {
+        font-weight: 600;
+    }
+
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.markdown(
+
+# ============================================================
+# HEADER
+# ============================================================
+
+left, right = st.columns([5, 1])
+
+with left:
+
+    st.markdown(
+        """
+        <div class="eyebrow">
+            M.Tech AIML · Machine Learning Assignment 2
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="main-title">'
+        'Bank Marketing Model Evaluation'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="subtitle">
+            Compare five classifiers on labelled test data.
+            Explore model performance, errors, and predictions.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with right:
+
+    st.markdown("")
+
+    st.markdown("**Evaluation mode**")
+
+    st.caption("Models are not retrained")
+
+
+st.divider()
+
+
+# ============================================================
+# ARTIFACT LOADING
+# ============================================================
+
+def resolve_artifact_dir():
     """
-    <div class="hero">
-      <div style="color:#b9dce8;font-size:.75rem;font-weight:700;letter-spacing:.08em;">
-        CLASSIFICATION • EXPERIMENT WORKSPACE
-      </div>
-      <h1>Bank Marketing | ML Experiment Lab</h1>
-      <p>
-        Compare five saved classifiers on labelled test data
-        and inspect the errors behind each score.
-      </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    Support artifacts in model/ or beside app.py.
+    """
 
-st.caption(
-    "Evaluation-only workflow: the saved preprocessing pipeline and "
-    "trained models are loaded from model/. Uploaded data is transformed "
-    "and evaluated; models are not retrained."
-)
+    if (MODEL_DIR / "preprocessor.joblib").is_file():
+        return MODEL_DIR
+
+    if (ROOT / "preprocessor.joblib").is_file():
+        return ROOT
+
+    return MODEL_DIR
 
 
-# ============================================================
-# Load the saved preprocessor and models
-# ============================================================
+@st.cache_resource(show_spinner="Loading trained models…")
+def load_artifacts(artifact_dir_string):
 
-@st.cache_resource
-def load_saved_artifacts():
-    """Load fitted preprocessing and trained models from disk."""
+    artifact_dir = Path(artifact_dir_string)
 
-    if not MODEL_DIR.exists():
-        raise FileNotFoundError(
-            f"Model folder not found: {MODEL_DIR}. "
-            "Place the model/ folder beside app.py."
-        )
-
-    required_files = [
+    required = [
         "preprocessor.joblib",
         *MODEL_FILES.values(),
     ]
 
-    missing_files = [
-        filename
-        for filename in required_files
-        if not (MODEL_DIR / filename).is_file()
+    missing = [
+        file
+        for file in required
+        if not (artifact_dir / file).is_file()
     ]
 
-    if missing_files:
+    if missing:
+
         raise FileNotFoundError(
-            "Missing files in model/: " + ", ".join(missing_files)
+            f"Missing files in {artifact_dir}: "
+            f"{', '.join(missing)}"
         )
 
-    preprocessor = joblib.load(MODEL_DIR / "preprocessor.joblib")
+    preprocessor = joblib.load(
+        artifact_dir / "preprocessor.joblib"
+    )
 
     models = {
-        model_name: joblib.load(MODEL_DIR / filename)
-        for model_name, filename in MODEL_FILES.items()
+        name: joblib.load(artifact_dir / filename)
+        for name, filename in MODEL_FILES.items()
     }
 
-    return preprocessor, models
+    feature_names = list(
+        getattr(
+            preprocessor,
+            "feature_names_in_",
+            [],
+        )
+    )
+
+    if not feature_names:
+
+        raise ValueError(
+            "The fitted preprocessor has no feature_names_in_. "
+            "Check that it is the fitted preprocessing artifact."
+        )
+
+    return preprocessor, models, feature_names
 
 
-def calculate_metrics(estimator, features, labels, dense_for_nb=False):
-    """Calculate metrics and predictions for a saved classifier."""
-
-    model_features = features
-
-    # GaussianNB requires a dense array if preprocessing returns sparse data.
-    if dense_for_nb and hasattr(features, "toarray"):
-        model_features = features.toarray()
-
-    predictions = estimator.predict(model_features)
-
-    # Use probabilities where available; otherwise use decision scores.
-    if hasattr(estimator, "predict_proba"):
-        positive_scores = estimator.predict_proba(model_features)[:, 1]
-    elif hasattr(estimator, "decision_function"):
-        positive_scores = estimator.decision_function(model_features)
-    else:
-        positive_scores = None
-
-    auc = np.nan
-
-    if positive_scores is not None and len(np.unique(labels)) == 2:
-        try:
-            auc = roc_auc_score(labels, positive_scores)
-        except (ValueError, TypeError):
-            auc = np.nan
-
-    metrics = {
-        "Accuracy": accuracy_score(labels, predictions),
-        "AUC": auc,
-        "Precision": precision_score(
-            labels, predictions, zero_division=0
-        ),
-        "Recall": recall_score(
-            labels, predictions, zero_division=0
-        ),
-        "F1-score": f1_score(
-            labels, predictions, zero_division=0
-        ),
-        "MCC": matthews_corrcoef(labels, predictions),
-    }
-
-    return metrics, predictions, positive_scores
-
-
-# ============================================================
-# Load model artifacts safely
-# ============================================================
+artifact_dir = resolve_artifact_dir()
 
 try:
-    preprocessor, models = load_saved_artifacts()
+
+    preprocessor, models, expected_features = load_artifacts(
+        str(artifact_dir)
+    )
 
 except Exception as exc:
-    st.error("The saved models could not be loaded.")
+
+    st.error("The saved ML artifacts could not be loaded.")
+
     st.code(str(exc))
 
     st.info(
-        "Check that app.py is beside the model/ folder. "
-        "The folder must contain all five saved model files "
-        "and preprocessor.joblib."
+        "Expected preprocessor.joblib and the five model files "
+        "inside a model/ folder beside app.py, "
+        "or directly beside app.py."
     )
 
     st.stop()
 
 
-# Read the input feature names from the fitted preprocessor.
-expected_columns = list(
-    getattr(preprocessor, "feature_names_in_", [])
-)
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-if not expected_columns:
-    st.error(
-        "The saved preprocessor does not expose feature_names_in_. "
-        "Ensure preprocessor.joblib is the fitted preprocessing "
-        "pipeline used for the Bank Marketing dataset."
+with st.sidebar:
+
+    st.title("Evaluation setup")
+
+    st.caption(
+        "Bank Marketing · Binary classification"
     )
-    st.stop()
+
+    st.divider()
+
+    uploaded_file = st.file_uploader(
+        "Upload labelled test data",
+        type=["csv"],
+        help=(
+            f"CSV must include {len(expected_features)} "
+            f"input features and `{TARGET}`."
+        ),
+    )
+
+    st.markdown("**Required target**")
+
+    st.code(
+        "deposit → yes / no",
+        language="text",
+    )
+
+    st.divider()
+
+    st.markdown("**Loaded artifacts**")
+
+    st.caption(
+        f"Preprocessor: `{artifact_dir.name}/preprocessor.joblib`"
+    )
+
+    for model_name in MODEL_FILES:
+
+        st.caption(
+            f"✓ {model_name}"
+        )
+
+    st.divider()
+
+    st.caption(
+        "The app transforms uploaded data and evaluates "
+        "saved models. It does not fit or retrain."
+    )
 
 
 # ============================================================
-# 1. Upload and validate labelled test data
+# DASHBOARD TABS
+# IMPORTANT: Create tabs BEFORE using them.
 # ============================================================
 
-st.subheader("1 · Load a labelled test dataset")
-
-uploaded_file = st.file_uploader(
-    "Upload a CSV file",
-    type=["csv"],
-    help=(
-        "The CSV must contain all original input features "
-        "and the deposit target column."
-    ),
+overview_tab, comparison_tab, detail_tab, prediction_tab, guide_tab = st.tabs(
+    [
+        "Overview",
+        "Model comparison",
+        "Model details",
+        "Prediction review",
+        "Metric guide",
+    ]
 )
+
+
+# ============================================================
+# EMPTY STATE
+# Dashboard is visible even before uploading a CSV.
+# ============================================================
 
 if uploaded_file is None:
-    st.info("Upload test_data.csv to start the model comparison.")
+
+    with overview_tab:
+
+        st.subheader("Your evaluation workspace")
+
+        st.info(
+            "Upload `test_data.csv` from the sidebar "
+            "to populate this dashboard."
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric(
+            "Classifiers",
+            "5",
+        )
+
+        col2.metric(
+            "Evaluation metrics",
+            "6",
+        )
+
+        col3.metric(
+            "Evaluation data",
+            "Not loaded",
+        )
+
+        st.markdown("#### What you can explore")
+
+        a, b, c = st.columns(3)
+
+        with a:
+
+            st.markdown("**Model comparison**")
+
+            st.caption(
+                "Compare Accuracy, AUC, Precision, "
+                "Recall, F1, and MCC."
+            )
+
+        with b:
+
+            st.markdown("**Model diagnostics**")
+
+            st.caption(
+                "Inspect confusion matrices and "
+                "class-wise classification reports."
+            )
+
+        with c:
+
+            st.markdown("**Prediction review**")
+
+            st.caption(
+                "Find incorrect predictions and "
+                "export results."
+            )
+
+    with comparison_tab:
+
+        st.subheader("Model comparison")
+
+        st.info(
+            "Upload labelled test data to calculate "
+            "and compare the five classifiers."
+        )
+
+    with detail_tab:
+
+        st.subheader("Model details")
+
+        st.info(
+            "Upload labelled test data to view metrics, "
+            "confusion matrix, and classification report."
+        )
+
+    with prediction_tab:
+
+        st.subheader("Prediction review")
+
+        st.info(
+            "Upload labelled test data to inspect "
+            "model predictions."
+        )
+
+    with guide_tab:
+
+        st.subheader("Evaluation metrics")
+
+        st.markdown(
+            """
+            | Metric | What it measures |
+            |---|---|
+            | Accuracy | Overall fraction of correct predictions |
+            | AUC | Ranking ability across classification thresholds |
+            | Precision | Reliability of positive predictions |
+            | Recall | Fraction of actual positive cases identified |
+            | F1-score | Harmonic mean of precision and recall |
+            | MCC | Balanced summary using all confusion-matrix outcomes |
+            """
+        )
+
     st.stop()
+
+
+# ============================================================
+# READ AND VALIDATE TEST DATA
+# ============================================================
 
 try:
-    uploaded_data = pd.read_csv(uploaded_file)
+
+    data = pd.read_csv(uploaded_file)
 
 except Exception as exc:
-    st.error(f"Could not read this CSV file: {exc}")
-    st.stop()
 
-if uploaded_data.empty:
-    st.error("The uploaded CSV contains no rows.")
-    st.stop()
-
-if TARGET_COLUMN not in uploaded_data.columns:
     st.error(
-        f"The uploaded CSV must contain the '{TARGET_COLUMN}' column."
+        f"Could not read the CSV: {exc}"
     )
+
     st.stop()
 
-missing_columns = [
-    column
-    for column in expected_columns
-    if column not in uploaded_data.columns
+
+if data.empty:
+
+    st.error(
+        "The uploaded CSV contains no rows."
+    )
+
+    st.stop()
+
+
+if TARGET not in data.columns:
+
+    st.error(
+        f"Required target column `{TARGET}` was not found."
+    )
+
+    st.stop()
+
+
+missing_features = [
+    col
+    for col in expected_features
+    if col not in data.columns
 ]
 
-if missing_columns:
+if missing_features:
+
     st.error(
-        "The CSV is missing required input features: "
-        + ", ".join(missing_columns)
+        "The uploaded CSV is missing these input features:"
     )
+
+    st.write(
+        ", ".join(
+            f"`{col}`"
+            for col in missing_features
+        )
+    )
+
     st.stop()
 
-# Normalize target labels and map them to integers.
-raw_labels = (
-    uploaded_data[TARGET_COLUMN]
+
+raw_target = (
+    data[TARGET]
     .astype(str)
     .str.strip()
     .str.lower()
 )
 
+
 unexpected_labels = sorted(
-    set(raw_labels.unique()) - set(LABEL_TO_INT)
+    set(raw_target.unique()) - set(LABEL_MAP)
 )
 
 if unexpected_labels:
+
     st.error(
-        "The target column must contain only 'yes' and 'no'. "
-        f"Unexpected values: {unexpected_labels}"
+        f"`{TARGET}` must contain only `yes` and `no`. "
+        f"Found: {unexpected_labels}"
     )
+
     st.stop()
 
-if raw_labels.nunique() < 2:
-    st.warning(
-        "The uploaded file contains only one target class. "
-        "AUC cannot be meaningfully calculated for this file."
-    )
 
-X_raw = uploaded_data[expected_columns].copy()
-y_true = raw_labels.map(LABEL_TO_INT).astype(int)
+y_true = (
+    raw_target
+    .map(LABEL_MAP)
+    .astype(int)
+)
 
-# Display basic dataset information.
-info_col1, info_col2, info_col3 = st.columns(3)
+X_raw = data[expected_features].copy()
 
-info_col1.metric("Test rows", f"{len(uploaded_data):,}")
-info_col2.metric("Input features", str(len(expected_columns)))
-info_col3.metric("Target classes", str(raw_labels.nunique()))
 
-with st.expander("Preview uploaded data"):
-    st.dataframe(
-        uploaded_data.head(10),
-        use_container_width=True,
-    )
-
-# Transform only. Do not fit or retrain the preprocessor.
 try:
-    X_transformed = preprocessor.transform(X_raw)
+
+    with st.spinner("Applying saved preprocessing…"):
+
+        X_test = preprocessor.transform(X_raw)
 
 except Exception as exc:
-    st.error(f"Preprocessing failed for the uploaded data: {exc}")
+
+    st.error(
+        f"Preprocessing failed: {exc}"
+    )
+
     st.stop()
 
-st.success(
-    "Data validated and transformed using the saved preprocessing pipeline."
-)
+
+if y_true.nunique() < 2:
+
+    st.warning(
+        "The uploaded test file contains only one class. "
+        "AUC will be unavailable."
+    )
 
 
 # ============================================================
-# 2. Compare all saved models
+# EVALUATION FUNCTIONS
 # ============================================================
 
-st.subheader("2 · Model comparison")
+def positive_scores(model, X):
 
-st.write(
-    "All metrics are calculated on the uploaded labelled test data. "
-    "The saved models are loaded from disk and are not retrained."
-)
+    """
+    Return the score associated with positive class 1.
+    """
 
-all_results = {}
-all_predictions = {}
-evaluation_errors = {}
+    if hasattr(model, "predict_proba"):
 
-for model_name, estimator in models.items():
-    try:
-        metrics, predictions, _ = calculate_metrics(
-            estimator=estimator,
-            features=X_transformed,
-            labels=y_true,
-            dense_for_nb=(model_name == "Gaussian Naive Bayes"),
+        probabilities = model.predict_proba(X)
+
+        classes = list(
+            getattr(
+                model,
+                "classes_",
+                [0, 1],
+            )
         )
 
-        all_results[model_name] = metrics
-        all_predictions[model_name] = predictions
+        if 1 in classes:
 
-    except Exception as exc:
-        evaluation_errors[model_name] = str(exc)
+            return probabilities[:, classes.index(1)]
+
+        return None
+
+    if hasattr(model, "decision_function"):
+
+        scores = model.decision_function(X)
+
+        classes = list(
+            getattr(
+                model,
+                "classes_",
+                [0, 1],
+            )
+        )
+
+        if len(classes) == 2 and classes[1] == 1:
+
+            return scores
+
+        if len(classes) == 2 and classes[0] == 1:
+
+            return -scores
+
+    return None
+
+
+def evaluate(name, model, X, y):
+
+    model_input = X
+
+    # GaussianNB requires dense input.
+    if (
+        name == "Gaussian Naive Bayes"
+        and hasattr(X, "toarray")
+    ):
+
+        model_input = X.toarray()
+
+    y_pred = model.predict(model_input)
+
+    score = positive_scores(
+        model,
+        model_input,
+    )
+
+    auc = np.nan
+
+    if score is not None and y.nunique() == 2:
+
+        try:
+
+            auc = roc_auc_score(
+                y,
+                score,
+            )
+
+        except (ValueError, TypeError):
+
+            pass
+
+    metrics = {
+
+        "Accuracy": accuracy_score(
+            y,
+            y_pred,
+        ),
+
+        "AUC": auc,
+
+        "Precision": precision_score(
+            y,
+            y_pred,
+            zero_division=0,
+        ),
+
+        "Recall": recall_score(
+            y,
+            y_pred,
+            zero_division=0,
+        ),
+
+        "F1-score": f1_score(
+            y,
+            y_pred,
+            zero_division=0,
+        ),
+
+        "MCC": matthews_corrcoef(
+            y,
+            y_pred,
+        ),
+    }
+
+    return metrics, y_pred
+
+
+# ============================================================
+# EVALUATE ALL MODELS
+# ============================================================
+
+results = {}
+
+predictions = {}
+
+evaluation_errors = {}
+
+
+with st.spinner("Evaluating five saved classifiers…"):
+
+    for name, model in models.items():
+
+        try:
+
+            metrics, y_pred = evaluate(
+                name,
+                model,
+                X_test,
+                y_true,
+            )
+
+            results[name] = metrics
+
+            predictions[name] = y_pred
+
+        except Exception as exc:
+
+            evaluation_errors[name] = str(exc)
+
 
 if evaluation_errors:
-    st.warning("One or more models could not be evaluated.")
 
-    for model_name, message in evaluation_errors.items():
-        st.write(f"**{model_name}:** {message}")
+    with st.expander(
+        "View model evaluation warnings"
+    ):
 
-if not all_results:
-    st.error("No model could be evaluated. Check the saved model files.")
+        for name, message in evaluation_errors.items():
+
+            st.warning(
+                f"{name}: {message}"
+            )
+
+
+if not results:
+
+    st.error(
+        "No models could be evaluated. "
+        "Check that saved models match the preprocessor."
+    )
+
     st.stop()
 
-# Rank models by MCC for display.
+
 comparison = pd.DataFrame.from_dict(
-    all_results,
+    results,
     orient="index",
 )
 
 comparison.index.name = "Model"
-comparison = comparison.reset_index()
 
-comparison = comparison.sort_values(
-    by="MCC",
-    ascending=False,
-    na_position="last",
+comparison = (
+    comparison
+    .reset_index()
+    .sort_values(
+        "MCC",
+        ascending=False,
+        na_position="last",
+    )
 )
 
-comparison_display = comparison.copy()
+best = comparison.iloc[0]
 
-for metric_name in [
-    "Accuracy",
-    "AUC",
-    "Precision",
-    "Recall",
-    "F1-score",
-    "MCC",
-]:
-    comparison_display[metric_name] = comparison_display[
-        metric_name
-    ].map(
-        lambda value: (
-            "—" if pd.isna(value) else f"{value:.4f}"
+
+# ============================================================
+# OVERVIEW TAB
+# ============================================================
+
+with overview_tab:
+
+    st.subheader("Evaluation overview")
+
+    st.caption(
+        "Results below are calculated from "
+        "the uploaded labelled test dataset."
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+
+    m1.metric(
+        "Test records",
+        f"{len(data):,}",
+    )
+
+    m2.metric(
+        "Input features",
+        f"{len(expected_features)}",
+    )
+
+    m3.metric(
+        "Models evaluated",
+        f"{len(results)} / 5",
+    )
+
+    m4.metric(
+        "Top model by MCC",
+        best["Model"],
+        f"{best['MCC']:.4f}",
+    )
+
+    left, right = st.columns(
+        [1.2, 1]
+    )
+
+    with left:
+
+        st.markdown(
+            "#### Test data preview"
+        )
+
+        st.dataframe(
+            data.head(8),
+            width="stretch",
+            hide_index=True,
+        )
+
+    with right:
+
+        st.markdown(
+            "#### Target distribution"
+        )
+
+        counts = (
+            raw_target
+            .value_counts()
+            .reindex(
+                ["no", "yes"],
+                fill_value=0,
+            )
+        )
+
+        fig, ax = plt.subplots(
+            figsize=(5, 3.5)
+        )
+
+        bars = ax.bar(
+            ["No", "Yes"],
+            counts.values,
+        )
+
+        ax.set_ylabel(
+            "Number of records"
+        )
+
+        ax.spines[
+            ["top", "right"]
+        ].set_visible(False)
+
+        ax.bar_label(
+            bars,
+            padding=3,
+        )
+
+        fig.tight_layout()
+
+        st.pyplot(
+            fig,
+            width="stretch",
+        )
+
+        plt.close(fig)
+
+    st.success(
+        f"**{best['Model']}** currently ranks highest "
+        "by MCC on this uploaded test set. "
+        "The ranking may change with a different test dataset."
+    )
+
+
+# ============================================================
+# MODEL COMPARISON TAB
+# ============================================================
+
+with comparison_tab:
+
+    st.subheader(
+        "Compare classifiers"
+    )
+
+    st.caption(
+        "All five models are evaluated on "
+        "the same uploaded test data."
+    )
+
+    shown = comparison.copy()
+
+    for metric in [
+        "Accuracy",
+        "AUC",
+        "Precision",
+        "Recall",
+        "F1-score",
+        "MCC",
+    ]:
+
+        shown[metric] = shown[metric].map(
+            lambda value:
+                "—"
+                if pd.isna(value)
+                else f"{value:.4f}"
+        )
+
+    st.dataframe(
+        shown,
+        width="stretch",
+        hide_index=True,
+    )
+
+    metric_choice = st.selectbox(
+        "Metric to visualize",
+        [
+            "MCC",
+            "F1-score",
+            "AUC",
+            "Accuracy",
+            "Precision",
+            "Recall",
+        ],
+    )
+
+    chart = (
+        comparison[
+            [
+                "Model",
+                metric_choice,
+            ]
+        ]
+        .set_index("Model")
+    )
+
+    st.bar_chart(
+        chart,
+        width="stretch",
+    )
+
+    st.download_button(
+        "Download metrics as CSV",
+        data=comparison.to_csv(
+            index=False
+        ).encode("utf-8"),
+        file_name="model_comparison_metrics.csv",
+        mime="text/csv",
+    )
+
+
+# ============================================================
+# MODEL DETAILS TAB
+# ============================================================
+
+with detail_tab:
+
+    st.subheader(
+        "Model diagnostics"
+    )
+
+    selected_model = st.selectbox(
+        "Select classifier",
+        list(results.keys()),
+        key="detail_model",
+    )
+
+    selected_metrics = results[
+        selected_model
+    ]
+
+    metric_cols = st.columns(6)
+
+    for col, metric in zip(
+        metric_cols,
+        [
+            "Accuracy",
+            "AUC",
+            "Precision",
+            "Recall",
+            "F1-score",
+            "MCC",
+        ],
+    ):
+
+        value = selected_metrics[
+            metric
+        ]
+
+        col.metric(
+            metric,
+            "—"
+            if pd.isna(value)
+            else f"{value:.4f}",
+        )
+
+    y_pred = predictions[
+        selected_model
+    ]
+
+    cm_col, report_col = st.columns(2)
+
+    with cm_col:
+
+        st.markdown(
+            "#### Confusion matrix"
+        )
+
+        cm = confusion_matrix(
+            y_true,
+            y_pred,
+            labels=[0, 1],
+        )
+
+        fig, ax = plt.subplots(
+            figsize=(5.4, 4.2)
+        )
+
+        ConfusionMatrixDisplay(
+            confusion_matrix=cm,
+            display_labels=CLASS_NAMES,
+        ).plot(
+            ax=ax,
+            values_format="d",
+            colorbar=False,
+            cmap="Blues",
+        )
+
+        ax.set_title(
+            selected_model
+        )
+
+        fig.tight_layout()
+
+        st.pyplot(
+            fig,
+            width="stretch",
+        )
+
+        plt.close(fig)
+
+    with report_col:
+
+        st.markdown(
+            "#### Classification report"
+        )
+
+        report = classification_report(
+            y_true,
+            y_pred,
+            labels=[0, 1],
+            target_names=CLASS_NAMES,
+            output_dict=True,
+            zero_division=0,
+        )
+
+        st.dataframe(
+            pd.DataFrame(
+                report
+            ).T.round(4),
+            width="stretch",
+        )
+
+
+# ============================================================
+# PREDICTION REVIEW TAB
+# ============================================================
+
+with prediction_tab:
+
+    st.subheader(
+        "Prediction review"
+    )
+
+    review_model = st.selectbox(
+        "Select classifier",
+        list(results.keys()),
+        key="prediction_model",
+    )
+
+    y_pred = predictions[
+        review_model
+    ]
+
+    review = data.copy()
+
+    review["Actual deposit"] = (
+        y_true
+        .map(
+            {
+                0: "no",
+                1: "yes",
+            }
+        )
+        .to_numpy()
+    )
+
+    review["Predicted deposit"] = (
+        pd.Series(
+            y_pred,
+            index=data.index,
+        )
+        .map(
+            {
+                0: "no",
+                1: "yes",
+            }
         )
     )
 
-st.dataframe(
-    comparison_display,
-    use_container_width=True,
-    hide_index=True,
-)
-
-best_model_name = comparison.iloc[0]["Model"]
-best_row = comparison.iloc[0]
-
-best_col1, best_col2, best_col3 = st.columns(3)
-
-best_col1.metric("Top MCC model", best_model_name)
-best_col2.metric(
-    "Best model accuracy",
-    f"{best_row['Accuracy']:.4f}",
-)
-best_col3.metric(
-    "Best model AUC",
-    "—"
-    if pd.isna(best_row["AUC"])
-    else f"{best_row['AUC']:.4f}",
-)
-
-st.caption(
-    "The model at the top is ranked by MCC on this uploaded dataset. "
-    "The top-ranked model may change with different evaluation data."
-)
-
-
-# ============================================================
-# 3. Inspect one model in detail
-# ============================================================
-
-st.subheader("3 · Inspect a model")
-
-available_models = list(all_results.keys())
-
-selected_model_name = st.selectbox(
-    "Choose a model to inspect",
-    options=available_models,
-    index=available_models.index(best_model_name),
-)
-
-selected_metrics = all_results[selected_model_name]
-selected_predictions = all_predictions[selected_model_name]
-
-metric_order = [
-    "Accuracy",
-    "AUC",
-    "Precision",
-    "Recall",
-    "F1-score",
-    "MCC",
-]
-
-metric_columns = st.columns(3)
-
-for index, metric_name in enumerate(metric_order):
-    value = selected_metrics[metric_name]
-
-    formatted_value = (
-        "—" if pd.isna(value) else f"{value:.4f}"
+    review["Correct prediction"] = (
+        review["Actual deposit"]
+        == review["Predicted deposit"]
     )
 
-    metric_columns[index % 3].metric(
-        metric_name,
-        formatted_value,
+    errors_only = st.checkbox(
+        "Show incorrect predictions only",
+        value=False,
     )
 
-
-# ============================================================
-# Confusion matrix and classification report
-# ============================================================
-
-matrix_col, report_col = st.columns([1, 1])
-
-with matrix_col:
-    st.markdown("#### Confusion matrix")
-
-    matrix = confusion_matrix(
-        y_true,
-        selected_predictions,
-        labels=[0, 1],
+    view = (
+        review.loc[
+            ~review["Correct prediction"]
+        ]
+        if errors_only
+        else review
     )
 
-    figure, axis = plt.subplots(figsize=(5, 4))
-
-    ConfusionMatrixDisplay(
-        confusion_matrix=matrix,
-        display_labels=CLASS_NAMES,
-    ).plot(
-        ax=axis,
-        values_format="d",
-        colorbar=False,
+    st.caption(
+        f"Showing up to 500 rows "
+        f"from {len(view):,} matching records."
     )
-
-    axis.set_title(selected_model_name)
-    figure.tight_layout()
-
-    st.pyplot(figure, use_container_width=True)
-    plt.close(figure)
-
-with report_col:
-    st.markdown("#### Classification report")
-
-    report = classification_report(
-        y_true,
-        selected_predictions,
-        labels=[0, 1],
-        target_names=CLASS_NAMES,
-        output_dict=True,
-        zero_division=0,
-    )
-
-    report_table = pd.DataFrame(report).transpose()
 
     st.dataframe(
-        report_table.round(4),
-        use_container_width=True,
+        view.head(500),
+        width="stretch" ,
+        hide_index=True,
+    )
+
+    st.download_button(
+        "Download prediction results",
+        data=review.to_csv(
+            index=False
+        ).encode("utf-8"),
+        file_name=(
+            f"{review_model.lower().replace(' ', '_')}"
+            "_predictions.csv"
+        ),
+        mime="text/csv",
     )
 
 
 # ============================================================
-# 4. Review and download predictions
+# METRIC GUIDE TAB
 # ============================================================
 
-st.subheader("4 · Prediction review")
+with guide_tab:
 
-st.write(
-    "Inspect where the selected model agrees or disagrees "
-    "with the actual labels in the uploaded CSV."
-)
+    st.subheader(
+        "Understanding the evaluation metrics"
+    )
 
-prediction_review = uploaded_data.copy()
-
-prediction_review["Actual deposit"] = (
-    y_true.map({0: "no", 1: "yes"}).to_numpy()
-)
-
-prediction_review["Predicted deposit"] = pd.Series(
-    selected_predictions,
-    index=uploaded_data.index,
-).map({0: "no", 1: "yes"})
-
-prediction_review["Correct prediction"] = (
-    prediction_review["Actual deposit"]
-    == prediction_review["Predicted deposit"]
-)
-
-show_only_errors = st.checkbox(
-    "Show only incorrect predictions",
-    value=False,
-)
-
-if show_only_errors:
-    prediction_review = prediction_review.loc[
-        ~prediction_review["Correct prediction"]
-    ]
-
-st.dataframe(
-    prediction_review.head(100),
-    use_container_width=True,
-    hide_index=True,
-)
-
-st.caption(
-    "A maximum of 100 rows is displayed to keep the interface responsive."
-)
-
-csv_bytes = prediction_review.to_csv(index=False).encode("utf-8")
-
-st.download_button(
-    label="Download displayed prediction review",
-    data=csv_bytes,
-    file_name="bank_marketing_prediction_review.csv",
-    mime="text/csv",
-)
-
-
-# ============================================================
-# 5. Metric explanations
-# ============================================================
-
-with st.expander("How to interpret the metrics"):
     st.markdown(
         """
-        - **Accuracy:** Proportion of all predictions that are correct.
-        - **AUC:** How well the model ranks positive cases above negative cases.
-        - **Precision:** Among customers predicted to subscribe, the proportion who did.
-        - **Recall:** Among customers who actually subscribed, the proportion identified.
-        - **F1-score:** Harmonic mean of precision and recall.
-        - **MCC:** Summary of prediction quality using all confusion-matrix
-          categories. It ranges from -1 to +1; higher is generally better.
-
-        AUC is unavailable when the uploaded test file contains only one
-        target class.
+        | Metric | Interpretation |
+        |---|---|
+        | **Accuracy** | Fraction of all predictions that are correct. |
+        | **AUC** | Ability to rank positive cases above negative cases across thresholds. |
+        | **Precision** | Among predicted subscribers, the fraction who actually subscribed. |
+        | **Recall** | Among actual subscribers, the fraction identified by the model. |
+        | **F1-score** | Harmonic mean of precision and recall. |
+        | **MCC** | Balanced summary using TP, TN, FP, and FN; ranges from −1 to +1. |
         """
     )
+
+    st.info(
+        "AUC is unavailable when the uploaded test data "
+        "contains only one target class."
+    )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "M.Tech AIML · Machine Learning Assignment 2 "
+    "· Bank Marketing classification"
+)
